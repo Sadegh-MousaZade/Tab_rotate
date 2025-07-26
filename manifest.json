@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Sadegh Tab Rotate",
+  "version": "1.0",
+  "description": "A Chrome extension to rotate tabs based on a JSON config",
+  "permissions": [
+    "tabs",
+    "storage",
+    "activeTab",
+    "scripting",
+    "webNavigation",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_icon": {
+      "128": "icon.png"
+    }
+  },
+  "options_page": "options.html",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src *;"
+  }
+}

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tab Rotate Clone Options</title>
+  <style>
+    body {
+      width: 400px;
+      padding: 10px 20px;
+      font-family: Arial, sans-serif;
+    }
+    input, button {
+      margin: 5px;
+      padding: 5px;
+    }
+    #status {
+      color: green;
+      margin-top: 10px;
+    }
+    #error {
+      color: red;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h2>Tab Rotate Clone Options</h2>
+  <label for="configUrl">Config URL:</label>
+  <input type="text" id="configUrl" placeholder="Enter JSON config URL" style="width: 100%;">
+  <br>
+  <button id="testUrl">Test URL</button>
+  <button id="startRotation">Start Rotation</button>
+  <button id="stopRotation">Stop Rotation</button>
+  <div id="status"></div>
+  <div id="error"></div>
+  <script src="options.js"></script>
+</body>
+</html>
