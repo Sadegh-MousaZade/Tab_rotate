@@ -5,6 +5,24 @@ let reloadIntervals = {};
 let isRotating = false;
 let tabIds = []; // Track tab IDs for each URL
 
+// Keep-alive to prevent Service Worker from terminating
+function keepAlive() {
+  setInterval(() => {
+    if (isRotating) {
+      chrome.runtime.getPlatformInfo(() => {}); // Dummy call to keep Service Worker alive
+    }
+  }, 20000); // Every 20 seconds
+}
+
+// Initialize context menu on extension install
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.create({
+    id: "openOptions",
+    title: "Open Tab Rotate Options",
+    contexts: ["action"]
+  });
+});
+
 // Handle icon click to toggle rotation
 chrome.action.onClicked.addListener(() => {
   if (isRotating) {
@@ -17,6 +35,7 @@ chrome.action.onClicked.addListener(() => {
         fetchConfigAndStart(result.configUrl, () => {
           chrome.action.setIcon({ path: 'icon-active.png' });
           isRotating = true;
+          keepAlive(); // Start keep-alive
         });
       } else {
         console.error('No config URL set');
@@ -36,6 +55,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       fetchConfigAndStart(result.configUrl, sendResponse);
       chrome.action.setIcon({ path: 'icon-active.png' });
       isRotating = true;
+      keepAlive(); // Start keep-alive
     });
     return true; // Keep message channel open for async response
   } else if (message.action === 'stopRotation') {
@@ -100,7 +120,7 @@ function startRotation() {
 
   // Start rotation
   function rotateTabs() {
-    if (!config || !config.websites.length) return;
+    if (!config || !config.websites.length || !isRotating) return;
 
     currentTabIndex = (currentTabIndex + 1) % config.websites.length;
     const tabId = tabIds[currentTabIndex];
@@ -109,37 +129,53 @@ function startRotation() {
       chrome.tabs.get(tabId, (tab) => {
         if (chrome.runtime.lastError || !tab) {
           // Tab might have been closed, recreate it
-          chrome.tabs.create({ url: config.websites[currentTabIndex].url }, (newTab) => {
+          chrome.tabs.create({ url: config.websites[currentTabIndex].url, active: true }, (newTab) => {
             tabIds[currentTabIndex] = newTab.id;
-            chrome.tabs.update(newTab.id, { active: true });
             if (!config.lazyLoadTabs) {
               setupReloadInterval(newTab.id, config.websites[currentTabIndex].tabReloadIntervalSeconds);
             }
+            scheduleNextRotation();
           });
         } else {
-          chrome.tabs.update(tabId, { active: true });
+          chrome.tabs.update(tabId, { active: true }, () => {
+            if (chrome.runtime.lastError) {
+              console.error('Error activating tab:', chrome.runtime.lastError.message);
+              // Recreate tab if update fails
+              chrome.tabs.create({ url: config.websites[currentTabIndex].url, active: true }, (newTab) => {
+                tabIds[currentTabIndex] = newTab.id;
+                if (!config.lazyLoadTabs) {
+                  setupReloadInterval(newTab.id, config.websites[currentTabIndex].tabReloadIntervalSeconds);
+                }
+              });
+            }
+            scheduleNextRotation();
+          });
         }
       });
     } else {
       // Tab ID not found, recreate tab
-      chrome.tabs.create({ url: config.websites[currentTabIndex].url }, (newTab) => {
+      chrome.tabs.create({ url: config.websites[currentTabIndex].url, active: true }, (newTab) => {
         tabIds[currentTabIndex] = newTab.id;
-        chrome.tabs.update(newTab.id, { active: true });
         if (!config.lazyLoadTabs) {
           setupReloadInterval(newTab.id, config.websites[currentTabIndex].tabReloadIntervalSeconds);
         }
+        scheduleNextRotation();
       });
     }
+  }
 
-    // Clear previous interval and set new one based on current tab's duration
+  // Schedule next rotation based on current tab's duration
+  function scheduleNextRotation() {
     if (rotationInterval) {
       clearInterval(rotationInterval);
     }
-    rotationInterval = setInterval(rotateTabs, config.websites[currentTabIndex].duration * 1000);
+    if (isRotating) {
+      rotationInterval = setTimeout(rotateTabs, config.websites[currentTabIndex].duration * 1000);
+    }
   }
 
   // Start the first rotation
-  rotationInterval = setInterval(rotateTabs, config.websites[currentTabIndex].duration * 1000);
+  scheduleNextRotation();
 }
 
 // Setup reload interval for a tab
@@ -148,14 +184,18 @@ function setupReloadInterval(tabId, intervalSeconds) {
     clearInterval(reloadIntervals[tabId]);
   }
   reloadIntervals[tabId] = setInterval(() => {
-    chrome.tabs.reload(tabId);
+    chrome.tabs.reload(tabId, {}, () => {
+      if (chrome.runtime.lastError) {
+        console.error('Error reloading tab:', chrome.runtime.lastError.message);
+      }
+    });
   }, intervalSeconds * 1000);
 }
 
 // Stop rotation
 function stopRotation() {
   if (rotationInterval) {
-    clearInterval(rotationInterval);
+    clearTimeout(rotationInterval);
     rotationInterval = null;
   }
   Object.values(reloadIntervals).forEach(interval => clearInterval(interval));
@@ -176,13 +216,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
 });
 
-// Add context menu to open options page
-chrome.contextMenus.create({
-  id: "openOptions",
-  title: "Open Tab Rotate Options",
-  contexts: ["action"]
-});
-
+// Handle context menu click
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === "openOptions") {
     chrome.runtime.openOptionsPage();
