@@ -199,7 +199,16 @@ async function checkConfigChanges() {
     if (validateConfig(newConfig) && JSON.stringify(config) !== JSON.stringify(newConfig)) {
       console.log('Config changed, updating rotation');
       config = newConfig;
+
+      // بستن تمام تب‌های فعلی قبل از باز کردن تب‌های جدید
+      chrome.tabs.query({}, (tabs) => {
+        tabs.forEach(tab => chrome.tabs.remove(tab.id));
+      });
+
+      // متوقف کردن چرخش فعلی و پاک‌سازی تمام حالات
       stopRotation();
+
+      // شروع چرخش با کانفیگ جدید
       startRotation();
     }
   } catch (err) {
