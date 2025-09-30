@@ -3,18 +3,17 @@ let currentTabIndex = 0;
 let rotationInterval = null;
 let reloadIntervals = {};
 let isRotating = false;
-let tabIds = []; // Track tab IDs for each URL
+let tabIds = [];
+let configCheckInterval = null;
 
-// Keep-alive to prevent Service Worker from terminating
 function keepAlive() {
   setInterval(() => {
     if (isRotating) {
       chrome.runtime.getPlatformInfo(() => {});
     }
-  }, 20000); // Every 20 seconds
+  }, 20000);
 }
 
-// Initialize context menu on extension install
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "openOptions",
@@ -23,7 +22,6 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
-// Handle icon click to toggle rotation
 chrome.action.onClicked.addListener(() => {
   if (isRotating) {
     stopRotation();
@@ -37,7 +35,7 @@ chrome.action.onClicked.addListener(() => {
           chrome.action.setIcon({ path: 'icon-active.png' });
           isRotating = true;
           chrome.storage.local.set({ isRotating: true });
-          keepAlive(); // Start keep-alive
+          keepAlive();
         });
       } else {
         console.error('No config URL set');
@@ -46,7 +44,6 @@ chrome.action.onClicked.addListener(() => {
   }
 });
 
-// Load and start rotation when message received
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'startRotation') {
     chrome.storage.local.get(['configUrl'], (result) => {
@@ -58,9 +55,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       chrome.action.setIcon({ path: 'icon-active.png' });
       isRotating = true;
       chrome.storage.local.set({ isRotating: true });
-      keepAlive(); // Start keep-alive
+      keepAlive();
     });
-    return true; // Keep message channel open for async response
+    return true;
   } else if (message.action === 'stopRotation') {
     stopRotation();
     chrome.action.setIcon({ path: 'icon.png' });
@@ -70,7 +67,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Fetch and validate config, then start rotation
 async function fetchConfigAndStart(configUrl, sendResponse) {
   try {
     const response = await fetch(configUrl);
@@ -80,11 +76,9 @@ async function fetchConfigAndStart(configUrl, sendResponse) {
       return;
     }
 
-    // Check if config has changed
     const configChanged = JSON.stringify(config) !== JSON.stringify(newConfig);
     config = newConfig;
 
-    // Only recreate tabs if config has changed or rotation is not active
     if (configChanged || !isRotating) {
       if (config.closeExistingTabs) {
         chrome.tabs.query({}, (tabs) => {
@@ -102,7 +96,6 @@ async function fetchConfigAndStart(configUrl, sendResponse) {
   }
 }
 
-// Validate config
 function validateConfig(config) {
   return config && config.websites && Array.isArray(config.websites) &&
     config.websites.every(site => 
@@ -112,30 +105,25 @@ function validateConfig(config) {
     );
 }
 
-// Start tab rotation
 function startRotation() {
   if (!config || !config.websites.length) return;
 
-  // Load saved state
   chrome.storage.local.get(['currentTabIndex'], (result) => {
     if (result.currentTabIndex) {
       currentTabIndex = result.currentTabIndex;
     }
 
-    // Clear previous tab IDs
     tabIds = [];
 
-    // Open initial tabs and store their IDs
     config.websites.forEach((site, index) => {
       chrome.tabs.create({ url: site.url, active: index === currentTabIndex }, (tab) => {
-        tabIds[index] = tab.id; // Store tab ID
+        tabIds[index] = tab.id;
         if (!config.lazyLoadTabs) {
           setupReloadInterval(tab.id, site.tabReloadIntervalSeconds);
         }
       });
     });
 
-    // Start rotation
     function rotateTabs() {
       if (!config || !config.websites.length || !isRotating) return;
 
@@ -148,7 +136,6 @@ function startRotation() {
       if (tabId) {
         chrome.tabs.get(tabId, (tab) => {
           if (chrome.runtime.lastError || !tab) {
-            // Tab might have been closed, recreate it
             chrome.tabs.create({ url: config.websites[currentTabIndex].url, active: true }, (newTab) => {
               tabIds[currentTabIndex] = newTab.id;
               if (!config.lazyLoadTabs) {
@@ -160,7 +147,6 @@ function startRotation() {
             chrome.tabs.update(tabId, { active: true }, () => {
               if (chrome.runtime.lastError) {
                 console.error('Error activating tab:', chrome.runtime.lastError.message);
-                // Recreate tab if update fails
                 chrome.tabs.create({ url: config.websites[currentTabIndex].url, active: true }, (newTab) => {
                   tabIds[currentTabIndex] = newTab.id;
                   if (!config.lazyLoadTabs) {
@@ -173,7 +159,6 @@ function startRotation() {
           }
         });
       } else {
-        // Tab ID not found, recreate tab
         chrome.tabs.create({ url: config.websites[currentTabIndex].url, active: true }, (newTab) => {
           tabIds[currentTabIndex] = newTab.id;
           if (!config.lazyLoadTabs) {
@@ -184,7 +169,6 @@ function startRotation() {
       }
     }
 
-    // Schedule next rotation based on current tab's duration
     function scheduleNextRotation() {
       if (rotationInterval) {
         clearTimeout(rotationInterval);
@@ -194,18 +178,40 @@ function startRotation() {
       }
     }
 
-    // Start the first rotation
     scheduleNextRotation();
+
+    if (!configCheckInterval) {
+      configCheckInterval = setInterval(checkConfigChanges, 60000);
+    }
   });
 }
 
-// Setup reload interval for a tab
+async function checkConfigChanges() {
+  if (!isRotating) return;
+
+  try {
+    const result = await new Promise(resolve => chrome.storage.local.get(['configUrl'], resolve));
+    if (!result.configUrl) return;
+
+    const response = await fetch(result.configUrl);
+    const newConfig = await response.json();
+
+    if (validateConfig(newConfig) && JSON.stringify(config) !== JSON.stringify(newConfig)) {
+      console.log('Config changed, updating rotation');
+      config = newConfig;
+      stopRotation();
+      startRotation();
+    }
+  } catch (err) {
+    console.error('Error checking config:', err.message);
+  }
+}
+
 function setupReloadInterval(tabId, intervalSeconds) {
   if (reloadIntervals[tabId]) {
     clearInterval(reloadIntervals[tabId]);
   }
   reloadIntervals[tabId] = setInterval(() => {
-    // Only reload if tab is not active
     chrome.tabs.get(tabId, (tab) => {
       if (chrome.runtime.lastError || !tab) return;
       if (!tab.active) {
@@ -219,31 +225,31 @@ function setupReloadInterval(tabId, intervalSeconds) {
   }, intervalSeconds * 1000);
 }
 
-// Stop rotation
 function stopRotation() {
   if (rotationInterval) {
     clearTimeout(rotationInterval);
     rotationInterval = null;
+  }
+  if (configCheckInterval) {
+    clearInterval(configCheckInterval);
+    configCheckInterval = null;
   }
   Object.values(reloadIntervals).forEach(interval => clearInterval(interval));
   reloadIntervals = {};
   tabIds = [];
 }
 
-// Clean up intervals when tabs are closed
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (reloadIntervals[tabId]) {
     clearInterval(reloadIntervals[tabId]);
     delete reloadIntervals[tabId];
   }
-  // Update tabIds if a tab is closed
   const index = tabIds.indexOf(tabId);
   if (index !== -1) {
     tabIds[index] = null;
   }
 });
 
-// Handle context menu click
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === "openOptions") {
     chrome.runtime.openOptionsPage();
