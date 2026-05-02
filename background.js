@@ -5,6 +5,7 @@ let reloadIntervals = {};
 let isRotating = false;
 let tabIds = [];
 let configCheckInterval = null;
+let progressUpdater = null;
 
 function keepAlive() {
   setInterval(() => {
@@ -114,6 +115,7 @@ function startRotation() {
     }
 
     tabIds = [];
+    let tabsCreated = 0;
 
     config.websites.forEach((site, index) => {
       chrome.tabs.create({ url: site.url, active: index === currentTabIndex }, (tab) => {
@@ -121,69 +123,141 @@ function startRotation() {
         if (!config.lazyLoadTabs) {
           setupReloadInterval(tab.id, site.tabReloadIntervalSeconds);
         }
+        tabsCreated++;
+        
+        if (tabsCreated === config.websites.length) {
+          setTimeout(() => {
+            if (isRotating) {
+              scheduleNextRotation();
+            }
+          }, 1000);
+        }
       });
     });
-
-    function rotateTabs() {
-      if (!config || !config.websites.length || !isRotating) return;
-
-      currentTabIndex = (currentTabIndex + 1) % config.websites.length;
-      chrome.storage.local.set({ currentTabIndex: currentTabIndex });
-      console.log(`Switching to tab ${currentTabIndex}: ${config.websites[currentTabIndex].url}`);
-
-      const tabId = tabIds[currentTabIndex];
-
-      if (tabId) {
-        chrome.tabs.get(tabId, (tab) => {
-          if (chrome.runtime.lastError || !tab) {
-            chrome.tabs.create({ url: config.websites[currentTabIndex].url, active: true }, (newTab) => {
-              tabIds[currentTabIndex] = newTab.id;
-              if (!config.lazyLoadTabs) {
-                setupReloadInterval(newTab.id, config.websites[currentTabIndex].tabReloadIntervalSeconds);
-              }
-              scheduleNextRotation();
-            });
-          } else {
-            chrome.tabs.update(tabId, { active: true }, () => {
-              if (chrome.runtime.lastError) {
-                console.error('Error activating tab:', chrome.runtime.lastError.message);
-                chrome.tabs.create({ url: config.websites[currentTabIndex].url, active: true }, (newTab) => {
-                  tabIds[currentTabIndex] = newTab.id;
-                  if (!config.lazyLoadTabs) {
-                    setupReloadInterval(newTab.id, config.websites[currentTabIndex].tabReloadIntervalSeconds);
-                  }
-                });
-              }
-              scheduleNextRotation();
-            });
-          }
-        });
-      } else {
-        chrome.tabs.create({ url: config.websites[currentTabIndex].url, active: true }, (newTab) => {
-          tabIds[currentTabIndex] = newTab.id;
-          if (!config.lazyLoadTabs) {
-            setupReloadInterval(newTab.id, config.websites[currentTabIndex].tabReloadIntervalSeconds);
-          }
-          scheduleNextRotation();
-        });
-      }
-    }
-
-    function scheduleNextRotation() {
-      if (rotationInterval) {
-        clearTimeout(rotationInterval);
-      }
-      if (isRotating) {
-        rotationInterval = setTimeout(rotateTabs, config.websites[currentTabIndex].duration * 1000);
-      }
-    }
-
-    scheduleNextRotation();
 
     if (!configCheckInterval) {
       configCheckInterval = setInterval(checkConfigChanges, 60000);
     }
   });
+}
+
+function rotateTabs() {
+  if (!config || !config.websites.length || !isRotating) return;
+
+  const oldTabId = tabIds[currentTabIndex];
+  if (oldTabId) {
+    sendProgressToTab(oldTabId, 'hideProgress');
+  }
+
+  currentTabIndex = (currentTabIndex + 1) % config.websites.length;
+  chrome.storage.local.set({ currentTabIndex: currentTabIndex });
+  console.log(`Switching to tab ${currentTabIndex}: ${config.websites[currentTabIndex].url}`);
+
+  const tabId = tabIds[currentTabIndex];
+
+  if (tabId) {
+    chrome.tabs.get(tabId, (tab) => {
+      if (chrome.runtime.lastError || !tab) {
+        chrome.tabs.create({ url: config.websites[currentTabIndex].url, active: true }, (newTab) => {
+          tabIds[currentTabIndex] = newTab.id;
+          if (!config.lazyLoadTabs) {
+            setupReloadInterval(newTab.id, config.websites[currentTabIndex].tabReloadIntervalSeconds);
+          }
+          setTimeout(() => {
+            if (isRotating) {
+              scheduleNextRotation();
+            }
+          }, 500);
+        });
+      } else {
+        chrome.tabs.update(tabId, { active: true }, () => {
+          if (chrome.runtime.lastError) {
+            console.error('Error activating tab:', chrome.runtime.lastError.message);
+            chrome.tabs.create({ url: config.websites[currentTabIndex].url, active: true }, (newTab) => {
+              tabIds[currentTabIndex] = newTab.id;
+              if (!config.lazyLoadTabs) {
+                setupReloadInterval(newTab.id, config.websites[currentTabIndex].tabReloadIntervalSeconds);
+              }
+              setTimeout(() => {
+                if (isRotating) scheduleNextRotation();
+              }, 500);
+            });
+          } else {
+            scheduleNextRotation();
+          }
+        });
+      }
+    });
+  } else {
+    chrome.tabs.create({ url: config.websites[currentTabIndex].url, active: true }, (newTab) => {
+      tabIds[currentTabIndex] = newTab.id;
+      if (!config.lazyLoadTabs) {
+        setupReloadInterval(newTab.id, config.websites[currentTabIndex].tabReloadIntervalSeconds);
+      }
+      setTimeout(() => {
+        if (isRotating) scheduleNextRotation();
+      }, 500);
+    });
+  }
+}
+
+function scheduleNextRotation() {
+  if (rotationInterval) {
+    clearTimeout(rotationInterval);
+  }
+  if (progressUpdater) {
+    clearInterval(progressUpdater);
+    progressUpdater = null;
+  }
+  
+  if (!isRotating) return;
+  
+  const currentSite = config.websites[currentTabIndex];
+  const currentTabId = tabIds[currentTabIndex];
+  const duration = currentSite.duration;
+  
+  if (currentTabId) {
+    chrome.tabs.get(currentTabId, (tab) => {
+      if (!chrome.runtime.lastError && tab && tab.active) {
+        sendProgressToTab(currentTabId, 'showProgress', {
+          duration: duration,
+          remaining: duration
+        });
+      }
+    });
+  }
+  
+  rotationInterval = setTimeout(() => {
+    if (isRotating) {
+      rotateTabs();
+    }
+  }, duration * 1000);
+  
+  const startTime = Date.now();
+  progressUpdater = setInterval(() => {
+    if (!isRotating) {
+      if (progressUpdater) clearInterval(progressUpdater);
+      return;
+    }
+    
+    const elapsed = (Date.now() - startTime) / 1000;
+    const remaining = Math.max(0, duration - elapsed);
+    const tabId = tabIds[currentTabIndex];
+    
+    if (tabId) {
+      sendProgressToTab(tabId, 'updateProgress', { remaining: remaining });
+    }
+    
+    if (remaining <= 0) {
+      if (progressUpdater) clearInterval(progressUpdater);
+      progressUpdater = null;
+    }
+  }, 100);
+}
+
+function sendProgressToTab(tabId, action, data = {}) {
+  if (!tabId) return;
+  chrome.tabs.sendMessage(tabId, { action, ...data }).catch(() => {});
 }
 
 async function checkConfigChanges() {
@@ -200,15 +274,11 @@ async function checkConfigChanges() {
       console.log('Config changed, updating rotation');
       config = newConfig;
 
-      // بستن تمام تب‌های فعلی قبل از باز کردن تب‌های جدید
       chrome.tabs.query({}, (tabs) => {
         tabs.forEach(tab => chrome.tabs.remove(tab.id));
       });
 
-      // متوقف کردن چرخش فعلی و پاک‌سازی تمام حالات
       stopRotation();
-
-      // شروع چرخش با کانفیگ جدید
       startRotation();
     }
   } catch (err) {
@@ -243,8 +313,19 @@ function stopRotation() {
     clearInterval(configCheckInterval);
     configCheckInterval = null;
   }
+  if (progressUpdater) {
+    clearInterval(progressUpdater);
+    progressUpdater = null;
+  }
   Object.values(reloadIntervals).forEach(interval => clearInterval(interval));
   reloadIntervals = {};
+  
+  // مخفی کردن نوار از همه تب‌ها
+  tabIds.forEach(tabId => {
+    if (tabId) {
+      sendProgressToTab(tabId, 'hideProgress');
+    }
+  });
   tabIds = [];
 }
 
