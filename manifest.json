@@ -23,6 +23,14 @@
     }
   },
   "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["progress.css"],
+      "run_at": "document_end"
+    }
+  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'; connect-src *;"
   }
