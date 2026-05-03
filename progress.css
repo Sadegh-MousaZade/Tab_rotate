@@ -3,7 +3,7 @@
   bottom: 0;
   left: 0;
   width: 100%;
-  height: 20px;
+  height: 24px;
   background-color: rgba(0, 0, 0, 0.4);
   z-index: 999999;
   pointer-events: none;
@@ -14,8 +14,9 @@
   height: 100%;
   background: linear-gradient(90deg, #4CAF50, #2196F3);
   transform-origin: right;
-  transition: transform 0.1s linear;
+  transition: transform 0.1s linear, background 0.2s ease, box-shadow 0.2s ease;
   transform: scaleX(1);
+  position: relative;
 }
 
 #tab-rotate-time-text {
@@ -24,9 +25,9 @@
   left: 12px;
   background: rgba(0, 0, 0, 0.75);
   color: white;
-  padding: 6px 14px;
+  padding: 8px 18px;
   border-radius: 20px;
-  font-size: 20px;
+  font-size: 26px;
   font-family: monospace;
   font-weight: bold;
   z-index: 999999;
@@ -34,4 +35,19 @@
   backdrop-filter: blur(4px);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
   letter-spacing: 1px;
+  transition: background-color 0.2s ease, transform 0.1s ease, box-shadow 0.2s ease;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes fireGlow {
+  0% {
+    filter: brightness(1);
+  }
+  100% {
+    filter: brightness(1.2) drop-shadow(0 0 4px orange);
+  }
 }
