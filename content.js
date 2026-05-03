@@ -1,4 +1,4 @@
-// content.js - نوار پیشرفت با حرکت از راست به چپ
+// content.js - نوار پیشرفت + پیش‌نمایش تب بعدی
 let progressInterval = null;
 let currentDuration = 0;
 let startTime = 0;
@@ -14,6 +14,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   else if (message.action === 'hideProgress') {
     hideProgressBar();
+    sendResponse({ status: 'ok' });
+  }
+  else if (message.action === 'showNextPreview') {
+    showNextPreview(message.nextUrl, message.nextDuration, message.screenshot, message.isFirstRound);
+    sendResponse({ status: 'ok' });
+  }
+  else if (message.action === 'updateNextPreview') {
+    updateNextPreview(message.screenshot);
+    sendResponse({ status: 'ok' });
+  }
+  else if (message.action === 'updateNextPreviewForUrl') {
+    updateNextPreviewForUrl(message.url, message.screenshot);
+    sendResponse({ status: 'ok' });
+  }
+  else if (message.action === 'hideNextPreview') {
+    hideNextPreview();
     sendResponse({ status: 'ok' });
   }
 });
@@ -54,9 +70,18 @@ function updateProgressBar(remainingSeconds) {
   
   if (!bar) return;
   
-  // محاسبه درصد (از راست به چپ)
   const percent = remainingSeconds / currentDuration;
   bar.style.transform = `scaleX(${percent})`;
+  
+  if (remainingSeconds <= 10) {
+    bar.style.background = 'linear-gradient(90deg, #FF6600, #FF3300, #FF0000)';
+    bar.style.boxShadow = '0 0 8px rgba(255, 50, 0, 0.6)';
+    bar.style.animation = 'fireGlow 0.15s ease-in-out infinite alternate';
+  } else {
+    bar.style.background = 'linear-gradient(90deg, #4CAF50, #2196F3)';
+    bar.style.boxShadow = 'none';
+    bar.style.animation = 'none';
+  }
   
   if (timeText) {
     const minutes = Math.floor(remainingSeconds / 60);
@@ -71,14 +96,111 @@ function updateProgressBar(remainingSeconds) {
     
     timeText.textContent = `⏱ ${timeStr}`;
     
-    // تغییر رنگ در 5 ثانیه آخر
-    if (remainingSeconds <= 5) {
+    if (remainingSeconds <= 10) {
       timeText.style.backgroundColor = 'rgba(244, 67, 54, 0.9)';
       timeText.style.animation = 'blink 0.5s ease-in-out infinite';
+      timeText.style.boxShadow = '0 0 12px rgba(244, 67, 54, 0.5)';
     } else {
       timeText.style.backgroundColor = 'rgba(0, 0, 0, 0.75)';
       timeText.style.animation = 'none';
+      timeText.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.2)';
     }
+    
+    if (remainingSeconds <= 5) {
+      timeText.style.backgroundColor = 'rgba(255, 0, 0, 1)';
+      timeText.style.animation = 'blink 0.2s ease-in-out infinite';
+      timeText.style.transform = 'scale(1.05)';
+      timeText.style.boxShadow = '0 0 20px rgba(255, 0, 0, 0.8)';
+    } else {
+      timeText.style.transform = 'scale(1)';
+    }
+  }
+}
+
+// ========================================
+// === پیش‌نمایش تب بعدی ===
+// ========================================
+function showNextPreview(nextUrl, nextDuration, screenshot, isFirstRound) {
+  hideNextPreview();
+  
+  const preview = document.createElement('div');
+  preview.id = 'tab-rotate-next-preview';
+  preview.setAttribute('data-url', nextUrl);
+  
+  let imageContent = '';
+  
+  if (screenshot) {
+    imageContent = `<img src="${screenshot}" alt="Next Tab Preview">`;
+  } else if (isFirstRound) {
+    imageContent = `
+      <div class="next-preview-loading">
+        <div class="loading-spinner"></div>
+        <span>در حال بارگذاری...</span>
+      </div>
+    `;
+  } else {
+    imageContent = `
+      <div class="next-preview-loading">
+        <div class="loading-spinner"></div>
+        <span>در حال بارگذاری...</span>
+      </div>
+    `;
+  }
+  
+  preview.innerHTML = `
+    <div class="next-preview-container">
+      <div class="next-preview-image">
+        ${imageContent}
+        <div class="next-preview-overlay"></div>
+      </div>
+      <div class="next-preview-label">NEXT</div>
+    </div>
+  `;
+  
+  document.body.appendChild(preview);
+  
+  setTimeout(() => {
+    preview.classList.add('visible');
+  }, 10);
+}
+
+function updateNextPreview(screenshot) {
+  const preview = document.getElementById('tab-rotate-next-preview');
+  if (!preview) return;
+  
+  const imageContainer = preview.querySelector('.next-preview-image');
+  if (imageContainer && screenshot) {
+    imageContainer.innerHTML = `
+      <img src="${screenshot}" alt="Next Tab Preview">
+      <div class="next-preview-overlay"></div>
+    `;
+  }
+}
+
+function updateNextPreviewForUrl(url, screenshot) {
+  // آپدیت preview اگه URL مطابقت داره
+  const preview = document.getElementById('tab-rotate-next-preview');
+  if (!preview) return;
+  
+  const previewUrl = preview.getAttribute('data-url');
+  if (previewUrl === url && screenshot) {
+    const imageContainer = preview.querySelector('.next-preview-image');
+    if (imageContainer) {
+      imageContainer.innerHTML = `
+        <img src="${screenshot}" alt="Next Tab Preview">
+        <div class="next-preview-overlay"></div>
+      `;
+    }
+  }
+}
+
+function hideNextPreview() {
+  const preview = document.getElementById('tab-rotate-next-preview');
+  if (preview) {
+    preview.classList.remove('visible');
+    setTimeout(() => {
+      if (preview.parentNode) preview.remove();
+    }, 300);
   }
 }
 
@@ -93,12 +215,106 @@ function hideProgressBar() {
   if (timeText) timeText.remove();
 }
 
-// اضافه کردن انیمیشن blink به صفحه
 const style = document.createElement('style');
 style.textContent = `
   @keyframes blink {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.6; }
+  }
+  
+  @keyframes fireGlow {
+    0% { filter: brightness(1); }
+    100% { filter: brightness(1.2) drop-shadow(0 0 4px orange); }
+  }
+  
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  
+  #tab-rotate-next-preview {
+    position: fixed;
+    bottom: 30px;
+    right: 20px;
+    z-index: 999998;
+    opacity: 0;
+    transform: translateX(50px);
+    transition: all 0.3s ease-out;
+  }
+  
+  #tab-rotate-next-preview.visible {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  
+  .next-preview-container {
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(10px);
+    border-radius: 16px;
+    padding: 8px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    text-align: center;
+    min-width: 100px;
+  }
+  
+  .next-preview-image {
+    width: 90px;
+    height: 60px;
+    border-radius: 10px;
+    overflow: hidden;
+    background: rgba(0, 0, 0, 0.5);
+    position: relative;
+  }
+  
+  .next-preview-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  
+  .next-preview-loading {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    color: white;
+    font-size: 10px;
+  }
+  
+  .loading-spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: #4CAF50;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  
+  .next-preview-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(135deg, rgba(33, 150, 243, 0.3), rgba(76, 175, 80, 0.3));
+    pointer-events: none;
+  }
+  
+  .next-preview-label {
+    margin-top: 6px;
+    font-size: 10px;
+    font-weight: bold;
+    color: white;
+    text-shadow: 0 1px 2px black;
+    letter-spacing: 1px;
+    background: linear-gradient(90deg, #4CAF50, #2196F3);
+    padding: 3px 10px;
+    border-radius: 20px;
+    display: inline-block;
+    font-family: monospace;
   }
 `;
 document.head.appendChild(style);
