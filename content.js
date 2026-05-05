@@ -1,4 +1,3 @@
-// content.js - نوار پیشرفت + پیش‌نمایش تب بعدی
 let progressInterval = null;
 let currentDuration = 0;
 let startTime = 0;
@@ -91,7 +90,7 @@ function updateProgressBar(remainingSeconds) {
     if (minutes > 0) {
       timeStr = `${minutes}:${seconds.toString().padStart(2, '0')}`;
     } else {
-      timeStr = `${seconds} ثانیه`;
+      timeStr = `${seconds} sec`;
     }
     
     timeText.textContent = `⏱ ${timeStr}`;
@@ -117,9 +116,6 @@ function updateProgressBar(remainingSeconds) {
   }
 }
 
-// ========================================
-// === پیش‌نمایش تب بعدی ===
-// ========================================
 function showNextPreview(nextUrl, nextDuration, screenshot, isFirstRound) {
   hideNextPreview();
   
@@ -135,14 +131,14 @@ function showNextPreview(nextUrl, nextDuration, screenshot, isFirstRound) {
     imageContent = `
       <div class="next-preview-loading">
         <div class="loading-spinner"></div>
-        <span>در حال بارگذاری...</span>
+        <span>Loading...</span>
       </div>
     `;
   } else {
     imageContent = `
       <div class="next-preview-loading">
         <div class="loading-spinner"></div>
-        <span>در حال بارگذاری...</span>
+        <span>Loading...</span>
       </div>
     `;
   }
@@ -178,7 +174,6 @@ function updateNextPreview(screenshot) {
 }
 
 function updateNextPreviewForUrl(url, screenshot) {
-  // آپدیت preview اگه URL مطابقت داره
   const preview = document.getElementById('tab-rotate-next-preview');
   if (!preview) return;
   
@@ -249,18 +244,18 @@ style.textContent = `
   .next-preview-container {
     background: rgba(0, 0, 0, 0.4);
     backdrop-filter: blur(10px);
-    border-radius: 16px;
-    padding: 10px;
+    border-radius: 20px;
+    padding: 14px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
     border: 1px solid rgba(255, 255, 255, 0.2);
     text-align: center;
-    min-width: 130px;
+    min-width: 160px;
   }
   
   .next-preview-image {
-    width: 120px;
-    height: 80px;
-    border-radius: 10px;
+    width: 150px;
+    height: 100px;
+    border-radius: 12px;
     overflow: hidden;
     background: rgba(0, 0, 0, 0.5);
     position: relative;
@@ -279,15 +274,15 @@ style.textContent = `
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 8px;
+    gap: 10px;
     color: white;
-    font-size: 11px;
+    font-size: 12px;
   }
   
   .loading-spinner {
-    width: 24px;
-    height: 24px;
-    border: 2px solid rgba(255, 255, 255, 0.3);
+    width: 30px;
+    height: 30px;
+    border: 3px solid rgba(255, 255, 255, 0.3);
     border-top-color: #4CAF50;
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
@@ -304,15 +299,15 @@ style.textContent = `
   }
   
   .next-preview-label {
-    margin-top: 8px;
-    font-size: 12px;
+    margin-top: 10px;
+    font-size: 14px;
     font-weight: bold;
     color: white;
     text-shadow: 0 1px 2px black;
     letter-spacing: 1px;
     background: linear-gradient(90deg, #4CAF50, #2196F3);
-    padding: 4px 14px;
-    border-radius: 20px;
+    padding: 6px 18px;
+    border-radius: 25px;
     display: inline-block;
     font-family: monospace;
   }

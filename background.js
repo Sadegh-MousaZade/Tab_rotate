@@ -8,6 +8,7 @@ let configCheckInterval = null;
 let progressUpdater = null;
 let screenshotCache = {};
 let isFirstRound = true;
+let currentConfigUrl = null;
 
 function keepAlive() {
   setInterval(() => {
@@ -34,7 +35,8 @@ chrome.action.onClicked.addListener(() => {
   } else {
     chrome.storage.local.get(['configUrl'], (result) => {
       if (result.configUrl) {
-        fetchConfigAndStart(result.configUrl, () => {
+        currentConfigUrl = result.configUrl;
+        resetAndStartFresh(result.configUrl, () => {
           chrome.action.setIcon({ path: 'icon-active.png' });
           isRotating = true;
           chrome.storage.local.set({ isRotating: true });
@@ -47,6 +49,16 @@ chrome.action.onClicked.addListener(() => {
   }
 });
 
+function resetAndStartFresh(configUrl, callback) {
+  console.log('Resetting and starting fresh round...');
+  screenshotCache = {};
+  isFirstRound = true;
+  if (isRotating) {
+    stopRotation();
+  }
+  fetchConfigAndStart(configUrl, callback);
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'startRotation') {
     chrome.storage.local.get(['configUrl'], (result) => {
@@ -54,7 +66,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ status: 'error', error: 'No config URL set' });
         return;
       }
-      fetchConfigAndStart(result.configUrl, sendResponse);
+      currentConfigUrl = result.configUrl;
+      resetAndStartFresh(result.configUrl, sendResponse);
       chrome.action.setIcon({ path: 'icon-active.png' });
       isRotating = true;
       chrome.storage.local.set({ isRotating: true });
@@ -75,7 +88,7 @@ async function fetchConfigAndStart(configUrl, sendResponse) {
     const response = await fetch(configUrl);
     const newConfig = await response.json();
     if (!validateConfig(newConfig)) {
-      sendResponse({ status: 'error', error: 'Invalid config format' });
+      if (sendResponse) sendResponse({ status: 'error', error: 'Invalid config format' });
       return;
     }
 
@@ -100,9 +113,9 @@ async function fetchConfigAndStart(configUrl, sendResponse) {
       }
     }
 
-    sendResponse({ status: 'started' });
+    if (sendResponse) sendResponse({ status: 'started' });
   } catch (err) {
-    sendResponse({ status: 'error', error: err.message });
+    if (sendResponse) sendResponse({ status: 'error', error: err.message });
   }
 }
 
@@ -150,9 +163,6 @@ function startRotation() {
   });
 }
 
-// ========================================
-// === گرفتن اسکرین‌شات از تب فعلی (بدون جابجایی) ===
-// ========================================
 async function captureCurrentTabScreenshot(tabId, url) {
   if (screenshotCache[url]) {
     return screenshotCache[url];
@@ -162,7 +172,6 @@ async function captureCurrentTabScreenshot(tabId, url) {
     const tab = await chrome.tabs.get(tabId);
     if (!tab || !tab.windowId) return null;
     
-    //直接从当前标签页截图，不需要切换
     const screenshot = await chrome.tabs.captureVisibleTab(tab.windowId, {
       format: 'jpeg',
       quality: 50
@@ -171,7 +180,6 @@ async function captureCurrentTabScreenshot(tabId, url) {
     screenshotCache[url] = screenshot;
     console.log(`Captured screenshot for current tab: ${url.substring(0, 50)}`);
     
-    // به تمام تب‌های دیگه اطلاع بده که اسکرین‌شات این تب آپدیت شده
     for (let i = 0; i < tabIds.length; i++) {
       const otherTabId = tabIds[i];
       if (otherTabId && otherTabId !== tabId) {
@@ -189,9 +197,6 @@ async function captureCurrentTabScreenshot(tabId, url) {
   }
 }
 
-// ========================================
-// === در دور اول، از تب فعلی اسکرین‌شات بگیر ===
-// ========================================
 async function captureScreenshotForCurrentTab() {
   const currentSite = config.websites[currentTabIndex];
   const currentTabId = tabIds[currentTabIndex];
@@ -305,9 +310,6 @@ function scheduleNextRotation() {
           });
         }
         
-        // ========================================
-        // === در دور اول، در میانه زمان نمایش، از تب فعلی اسکرین‌شات بگیر ===
-        // ========================================
         if (isFirstRound && !screenshotCache[currentSite.url]) {
           const captureDelay = (duration * 1000) / 2;
           setTimeout(() => {
@@ -362,7 +364,7 @@ async function checkConfigChanges() {
     const newConfig = await response.json();
 
     if (validateConfig(newConfig) && JSON.stringify(config) !== JSON.stringify(newConfig)) {
-      console.log('Config changed, updating rotation');
+      console.log('Config changed, resetting and starting fresh round');
       screenshotCache = {};
       isFirstRound = true;
       config = newConfig;
