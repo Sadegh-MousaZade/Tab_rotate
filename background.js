@@ -85,7 +85,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function fetchConfigAndStart(configUrl, sendResponse) {
   try {
-    const response = await fetch(configUrl);
+    const response = await fetch(configUrl, {
+      method: 'GET',
+      cache: 'no-cache'
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
     const newConfig = await response.json();
     if (!validateConfig(newConfig)) {
       if (sendResponse) sendResponse({ status: 'error', error: 'Invalid config format' });
@@ -104,9 +112,10 @@ async function fetchConfigAndStart(configUrl, sendResponse) {
 
     if (configChanged || !isRotating) {
       if (config.closeExistingTabs) {
-        chrome.tabs.query({}, (tabs) => {
-          tabs.forEach(tab => chrome.tabs.remove(tab.id));
-        });
+        const tabs = await chrome.tabs.query({});
+        for (const tab of tabs) {
+          chrome.tabs.remove(tab.id).catch(() => {});
+        }
       }
       if (config.autoStart || isRotating) {
         startRotation();
@@ -115,15 +124,18 @@ async function fetchConfigAndStart(configUrl, sendResponse) {
 
     if (sendResponse) sendResponse({ status: 'started' });
   } catch (err) {
+    console.error('Error fetching config:', err.message);
     if (sendResponse) sendResponse({ status: 'error', error: err.message });
   }
 }
 
 function validateConfig(config) {
   return config && config.websites && Array.isArray(config.websites) &&
+    config.websites.length > 0 &&
     config.websites.every(site => 
       site.url && typeof site.url === 'string' &&
       site.duration && typeof site.duration === 'number' &&
+      site.duration > 0 &&
       site.tabReloadIntervalSeconds && typeof site.tabReloadIntervalSeconds === 'number'
     );
 }
@@ -132,8 +144,10 @@ function startRotation() {
   if (!config || !config.websites.length) return;
 
   chrome.storage.local.get(['currentTabIndex'], (result) => {
-    if (result.currentTabIndex) {
+    if (result.currentTabIndex && result.currentTabIndex < config.websites.length) {
       currentTabIndex = result.currentTabIndex;
+    } else {
+      currentTabIndex = 0;
     }
 
     tabIds = [];
@@ -152,13 +166,14 @@ function startRotation() {
             if (isRotating) {
               scheduleNextRotation();
             }
-          }, 1000);
+          }, 2000);
         }
       });
     });
 
     if (!configCheckInterval) {
-      configCheckInterval = setInterval(checkConfigChanges, 60000);
+      const intervalMinutes = config.settingsReloadIntervalMinutes || 1;
+      configCheckInterval = setInterval(checkConfigChanges, intervalMinutes * 60 * 1000);
     }
   });
 }
@@ -358,9 +373,35 @@ async function checkConfigChanges() {
 
   try {
     const result = await new Promise(resolve => chrome.storage.local.get(['configUrl'], resolve));
-    if (!result.configUrl) return;
+    if (!result.configUrl) {
+      return;
+    }
 
-    const response = await fetch(result.configUrl);
+    console.log('Checking for config changes...');
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    
+    const response = await fetch(result.configUrl, {
+      method: 'GET',
+      signal: controller.signal,
+      cache: 'no-cache'
+    }).catch((fetchErr) => {
+      console.warn('Network error while checking config:', fetchErr.message);
+      return null;
+    });
+    
+    clearTimeout(timeoutId);
+    
+    if (!response) {
+      return;
+    }
+    
+    if (!response.ok) {
+      console.warn(`Config fetch returned ${response.status}, skipping update`);
+      return;
+    }
+    
     const newConfig = await response.json();
 
     if (validateConfig(newConfig) && JSON.stringify(config) !== JSON.stringify(newConfig)) {
@@ -369,15 +410,18 @@ async function checkConfigChanges() {
       isFirstRound = true;
       config = newConfig;
 
-      chrome.tabs.query({}, (tabs) => {
-        tabs.forEach(tab => chrome.tabs.remove(tab.id));
-      });
+      const tabs = await chrome.tabs.query({});
+      for (const tab of tabs) {
+        chrome.tabs.remove(tab.id).catch(() => {});
+      }
 
       stopRotation();
       startRotation();
+    } else {
+      console.log('Config unchanged');
     }
   } catch (err) {
-    console.error('Error checking config:', err.message);
+    console.warn('Config check failed (rotation continues):', err.message);
   }
 }
 
@@ -400,6 +444,7 @@ function setupReloadInterval(tabId, intervalSeconds) {
 }
 
 function stopRotation() {
+  console.log('Stopping rotation...');
   if (rotationInterval) {
     clearTimeout(rotationInterval);
     rotationInterval = null;
