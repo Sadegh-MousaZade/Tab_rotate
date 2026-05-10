@@ -36,7 +36,7 @@ chrome.action.onClicked.addListener(() => {
     chrome.storage.local.get(['configUrl'], (result) => {
       if (result.configUrl) {
         currentConfigUrl = result.configUrl;
-        resetAndStartFresh(result.configUrl, () => {
+        fullResetAndStart(result.configUrl, () => {
           chrome.action.setIcon({ path: 'icon-active.png' });
           isRotating = true;
           chrome.storage.local.set({ isRotating: true });
@@ -49,13 +49,17 @@ chrome.action.onClicked.addListener(() => {
   }
 });
 
-function resetAndStartFresh(configUrl, callback) {
-  console.log('Resetting and starting fresh round...');
+function fullResetAndStart(configUrl, callback) {
+  console.log('Full reset: clearing all cache and starting fresh round from beginning');
   screenshotCache = {};
   isFirstRound = true;
+  currentTabIndex = 0;
+  chrome.storage.local.set({ currentTabIndex: 0 });
+  
   if (isRotating) {
     stopRotation();
   }
+  
   fetchConfigAndStart(configUrl, callback);
 }
 
@@ -67,7 +71,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
       currentConfigUrl = result.configUrl;
-      resetAndStartFresh(result.configUrl, sendResponse);
+      fullResetAndStart(result.configUrl, sendResponse);
       chrome.action.setIcon({ path: 'icon-active.png' });
       isRotating = true;
       chrome.storage.local.set({ isRotating: true });
@@ -85,15 +89,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function fetchConfigAndStart(configUrl, sendResponse) {
   try {
-    const response = await fetch(configUrl, {
-      method: 'GET',
-      cache: 'no-cache'
-    });
-    
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    
+    const response = await fetch(configUrl);
     const newConfig = await response.json();
     if (!validateConfig(newConfig)) {
       if (sendResponse) sendResponse({ status: 'error', error: 'Invalid config format' });
@@ -112,10 +108,9 @@ async function fetchConfigAndStart(configUrl, sendResponse) {
 
     if (configChanged || !isRotating) {
       if (config.closeExistingTabs) {
-        const tabs = await chrome.tabs.query({});
-        for (const tab of tabs) {
-          chrome.tabs.remove(tab.id).catch(() => {});
-        }
+        chrome.tabs.query({}, (tabs) => {
+          tabs.forEach(tab => chrome.tabs.remove(tab.id));
+        });
       }
       if (config.autoStart || isRotating) {
         startRotation();
@@ -124,18 +119,15 @@ async function fetchConfigAndStart(configUrl, sendResponse) {
 
     if (sendResponse) sendResponse({ status: 'started' });
   } catch (err) {
-    console.error('Error fetching config:', err.message);
     if (sendResponse) sendResponse({ status: 'error', error: err.message });
   }
 }
 
 function validateConfig(config) {
   return config && config.websites && Array.isArray(config.websites) &&
-    config.websites.length > 0 &&
     config.websites.every(site => 
       site.url && typeof site.url === 'string' &&
       site.duration && typeof site.duration === 'number' &&
-      site.duration > 0 &&
       site.tabReloadIntervalSeconds && typeof site.tabReloadIntervalSeconds === 'number'
     );
 }
@@ -143,39 +135,30 @@ function validateConfig(config) {
 function startRotation() {
   if (!config || !config.websites.length) return;
 
-  chrome.storage.local.get(['currentTabIndex'], (result) => {
-    if (result.currentTabIndex && result.currentTabIndex < config.websites.length) {
-      currentTabIndex = result.currentTabIndex;
-    } else {
-      currentTabIndex = 0;
-    }
+  tabIds = [];
+  let tabsCreated = 0;
 
-    tabIds = [];
-    let tabsCreated = 0;
-
-    config.websites.forEach((site, index) => {
-      chrome.tabs.create({ url: site.url, active: index === currentTabIndex }, (tab) => {
-        tabIds[index] = tab.id;
-        if (!config.lazyLoadTabs) {
-          setupReloadInterval(tab.id, site.tabReloadIntervalSeconds);
-        }
-        tabsCreated++;
-        
-        if (tabsCreated === config.websites.length) {
-          setTimeout(() => {
-            if (isRotating) {
-              scheduleNextRotation();
-            }
-          }, 2000);
-        }
-      });
+  config.websites.forEach((site, index) => {
+    chrome.tabs.create({ url: site.url, active: index === currentTabIndex }, (tab) => {
+      tabIds[index] = tab.id;
+      if (!config.lazyLoadTabs) {
+        setupReloadInterval(tab.id, site.tabReloadIntervalSeconds);
+      }
+      tabsCreated++;
+      
+      if (tabsCreated === config.websites.length) {
+        setTimeout(() => {
+          if (isRotating) {
+            scheduleNextRotation();
+          }
+        }, 1000);
+      }
     });
-
-    if (!configCheckInterval) {
-      const intervalMinutes = config.settingsReloadIntervalMinutes || 1;
-      configCheckInterval = setInterval(checkConfigChanges, intervalMinutes * 60 * 1000);
-    }
   });
+
+  if (!configCheckInterval) {
+    configCheckInterval = setInterval(checkConfigChanges, 60000);
+  }
 }
 
 async function captureCurrentTabScreenshot(tabId, url) {
@@ -299,40 +282,57 @@ function scheduleNextRotation() {
   
   if (!isRotating) return;
   
+  if (!config || !config.websites || !config.websites[currentTabIndex]) {
+    setTimeout(() => {
+      if (isRotating) scheduleNextRotation();
+    }, 1000);
+    return;
+  }
+  
   const currentSite = config.websites[currentTabIndex];
   const currentTabId = tabIds[currentTabIndex];
   const duration = currentSite.duration;
   
   if (currentTabId) {
     chrome.tabs.get(currentTabId, (tab) => {
-      if (!chrome.runtime.lastError && tab && tab.active) {
-        sendProgressToTab(currentTabId, 'showProgress', {
-          duration: duration,
-          remaining: duration
+      if (chrome.runtime.lastError || !tab || !tab.active) {
+        setTimeout(() => {
+          if (isRotating) scheduleNextRotation();
+        }, 1000);
+        return;
+      }
+      
+      sendProgressToTab(currentTabId, 'showProgress', {
+        duration: duration,
+        remaining: duration
+      });
+      
+      const nextIndex = (currentTabIndex + 1) % config.websites.length;
+      const nextSite = config.websites[nextIndex];
+      
+      if (nextSite) {
+        const cachedScreenshot = screenshotCache[nextSite.url];
+        
+        sendProgressToTab(currentTabId, 'showNextPreview', {
+          nextUrl: nextSite.url,
+          nextDuration: nextSite.duration,
+          screenshot: cachedScreenshot || null,
+          isFirstRound: isFirstRound
         });
-        
-        const nextIndex = (currentTabIndex + 1) % config.websites.length;
-        const nextSite = config.websites[nextIndex];
-        
-        if (nextSite) {
-          const cachedScreenshot = screenshotCache[nextSite.url];
-          
-          sendProgressToTab(currentTabId, 'showNextPreview', {
-            nextUrl: nextSite.url,
-            nextDuration: nextSite.duration,
-            screenshot: cachedScreenshot || null,
-            isFirstRound: isFirstRound
-          });
-        }
-        
-        if (isFirstRound && !screenshotCache[currentSite.url]) {
-          const captureDelay = (duration * 1000) / 2;
-          setTimeout(() => {
-            captureScreenshotForCurrentTab();
-          }, captureDelay);
-        }
+      }
+      
+      if (isFirstRound && !screenshotCache[currentSite.url]) {
+        const captureDelay = (duration * 1000) / 2;
+        setTimeout(() => {
+          captureScreenshotForCurrentTab();
+        }, captureDelay);
       }
     });
+  } else {
+    setTimeout(() => {
+      if (isRotating) scheduleNextRotation();
+    }, 1000);
+    return;
   }
   
   rotationInterval = setTimeout(() => {
@@ -373,32 +373,12 @@ async function checkConfigChanges() {
 
   try {
     const result = await new Promise(resolve => chrome.storage.local.get(['configUrl'], resolve));
-    if (!result.configUrl) {
-      return;
-    }
+    if (!result.configUrl) return;
 
-    console.log('Checking for config changes...');
-    
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
-    
-    const response = await fetch(result.configUrl, {
-      method: 'GET',
-      signal: controller.signal,
-      cache: 'no-cache'
-    }).catch((fetchErr) => {
-      console.warn('Network error while checking config:', fetchErr.message);
-      return null;
-    });
-    
-    clearTimeout(timeoutId);
-    
-    if (!response) {
-      return;
-    }
+    const response = await fetch(result.configUrl);
     
     if (!response.ok) {
-      console.warn(`Config fetch returned ${response.status}, skipping update`);
+      console.warn('Config fetch returned', response.status);
       return;
     }
     
@@ -417,11 +397,9 @@ async function checkConfigChanges() {
 
       stopRotation();
       startRotation();
-    } else {
-      console.log('Config unchanged');
     }
   } catch (err) {
-    console.warn('Config check failed (rotation continues):', err.message);
+    console.warn('Config check skipped:', err.message);
   }
 }
 
@@ -444,7 +422,6 @@ function setupReloadInterval(tabId, intervalSeconds) {
 }
 
 function stopRotation() {
-  console.log('Stopping rotation...');
   if (rotationInterval) {
     clearTimeout(rotationInterval);
     rotationInterval = null;
